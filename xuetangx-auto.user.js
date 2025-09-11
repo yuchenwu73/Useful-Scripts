@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         学堂在线刷课
+// @name         学堂在线刷课 (1.0x倍速版)
 // @namespace    http://tampermonkey.net/
-// @version      0.4.0
-// @description  该脚本可以完成学堂在线课程中的视频以及图文，自动跳过课后习题和讨论题
+// @version      0.4.1 
+// @description  该脚本可以完成学堂在线课程中的视频以及图文，自动跳过课后习题和讨论题，并将视频速度锁定在1.0x。
 // @match        https://www.xuetangx.com/*
 // @require      https://code.jquery.com/jquery-3.7.1.js
 // @icon         data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==
@@ -15,7 +15,7 @@
 (function () {
     'use strict';
     
-    console.log('学堂在线自动刷课脚本已启动');
+    console.log('学堂在线自动刷课脚本已启动 (1.0x倍速版)');
     
     // 自动开始刷课
     let autoInterval;
@@ -54,7 +54,7 @@
 
             //不想关闭声音可以把此行代码删掉
             soundClose();
-            speed();
+            speed(); // 调用修改后的speed函数
 
             //视频播放进度达到100%跳转下一节视频
             if ((c / d) >= 1.0 || c >= d) {
@@ -75,12 +75,29 @@
         }
     }
     
-    //播放速度2.0
+    //播放速度锁定1.0
     function speed() {
-        let speed = $(".xt_video_player_common_list");
-        let speedChild = speed.children()[0];
-        if (speedChild) {
-            speedChild.click();
+        // 找到当前显示速度的元素，检查是否已经是1.0x，避免重复点击
+        let currentSpeedLabel = $(".xt_video_player_common_label");
+        if (currentSpeedLabel.text().trim() === "1.0x") {
+            return; // 如果已经是1.0x，则不做任何操作
+        }
+        
+        // 找到包含所有速度选项的列表元素
+        let speedList = $(".xt_video_player_common_list");
+        
+        if (speedList.length > 0) {
+            // 从列表中筛选出文本内容为 "1.0x" 的那个选项
+            let speedOption1x = speedList.children().filter(function() {
+                // 使用 .trim() 去除可能的空格，确保精确匹配
+                return $(this).text().trim() === "1.0x";
+            });
+
+            // 如果成功找到了 "1.0x" 选项，就点击它
+            if (speedOption1x.length > 0) {
+                speedOption1x.click();
+                console.log("播放速度已设置为 1.0x");
+            }
         }
     }
 
