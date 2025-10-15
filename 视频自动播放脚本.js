@@ -4,7 +4,7 @@
 // @version      2025-10-14
 // @description  自动播放视频并循环，每30秒模拟用户活动防止超时，每2分钟自动刷新页面
 // @author       You
-// @match        https://labsafetest.uestc.edu.cn/redir.php?*cmd=shipinxx_view*
+// @match        https://labsafetest.uestc.edu.cn/redir.php*
 // @icon         https://www.google.com/s2/favicons?sz=64&domain=uestc.edu.cn
 // @grant        none
 // ==/UserScript==
