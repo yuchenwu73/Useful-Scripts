@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         学堂在线刷课 (1.0x倍速版)
 // @namespace    http://tampermonkey.net/
-// @version      0.4.1 
-// @description  该脚本可以完成学堂在线课程中的视频以及图文，自动跳过课后习题和讨论题，并将视频速度锁定在1.0x。
+// @version      0.5.0
+// @description  该脚本可以完成学堂在线课程中的视频以及图文，自动跳过课后习题和讨论题，并将视频速度锁定在1.0x。新增：严格的视频完整播放检测，确保视频完整观看后才跳转，使用localStorage记录已完成视频避免重复播放。
 // @match        https://www.xuetangx.com/*
 // @require      https://code.jquery.com/jquery-3.7.1.js
 // @icon         data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==
@@ -15,7 +15,47 @@
 (function () {
     'use strict';
     
+    console.log('========================================');
     console.log('学堂在线自动刷课脚本已启动 (1.0x倍速版)');
+    console.log('版本: 0.5.0');
+    console.log('功能: 严格视频完整播放检测 + 已完成视频记录');
+    console.log('提示: 如需清除已完成视频记录，请在控制台执行:');
+    console.log('localStorage.removeItem("xuetangx_completed_videos")');
+    console.log('========================================');
+    
+    // ========== 视频完成状态管理 ==========
+    
+    // 获取当前视频的唯一标识
+    function getVideoId() {
+        // 使用URL路径作为视频的唯一标识
+        let path = window.location.pathname + window.location.search;
+        return path;
+    }
+    
+    // 检查视频是否已完成
+    function isVideoCompleted(videoId) {
+        try {
+            let completedVideos = JSON.parse(localStorage.getItem('xuetangx_completed_videos') || '{}');
+            return completedVideos[videoId] === true;
+        } catch (e) {
+            console.error("读取已完成视频记录失败:", e);
+            return false;
+        }
+    }
+    
+    // 标记视频为已完成
+    function markVideoAsCompleted(videoId) {
+        try {
+            let completedVideos = JSON.parse(localStorage.getItem('xuetangx_completed_videos') || '{}');
+            completedVideos[videoId] = true;
+            localStorage.setItem('xuetangx_completed_videos', JSON.stringify(completedVideos));
+            console.log("✓ 视频已标记为完成:", videoId);
+        } catch (e) {
+            console.error("保存已完成视频记录失败:", e);
+        }
+    }
+    
+    // ========== 自动刷课相关 ==========
     
     // 自动开始刷课
     let autoInterval;
@@ -40,6 +80,37 @@
             return;
         }
 
+        // 获取当前视频ID
+        let videoId = getVideoId();
+        console.log("当前视频ID:", videoId);
+        
+        // 检查当前视频是否已完成
+        if (isVideoCompleted(videoId)) {
+            console.log("⚠ 此视频已完成，跳转下一节");
+            $(".next").click();
+            return;
+        }
+
+        // 为视频添加ended事件监听（只添加一次）
+        if (!video.hasAttribute('data-auto-listener')) {
+            video.setAttribute('data-auto-listener', 'true');
+            // 使用立即执行函数确保videoId被正确捕获
+            (function(currentVideoId) {
+                video.addEventListener('ended', function() {
+                    console.log("========================================");
+                    console.log("✓ 视频ended事件触发，视频已播放完成");
+                    console.log("完成的视频ID:", currentVideoId);
+                    console.log("========================================");
+                    markVideoAsCompleted(currentVideoId);
+                    setTimeout(() => {
+                        $(".next").click();
+                        console.log("准备跳转到下一节...");
+                    }, 1000); // 等待1秒后跳转，确保状态已保存
+                });
+            })(videoId);
+            console.log("✓ 已为视频添加ended事件监听器");
+        }
+
         let staNow = $(".play-btn-tip");
         if (staNow.text() == "播放") {
             $(".xt_video_player_mask").click();
@@ -50,17 +121,33 @@
         let d = video.duration;
 
         if (d && !isNaN(d)) {
-            console.log(`视频进度: ${c}/${d} (${((c/d)*100).toFixed(1)}%)`);
+            let percentage = ((c/d)*100).toFixed(1);
+            let remainingTime = d - c;
+            
+            console.log(`视频进度: ${c.toFixed(1)}/${d.toFixed(1)}秒 (${percentage}%) 剩余: ${remainingTime.toFixed(1)}秒`);
 
             //不想关闭声音可以把此行代码删掉
             soundClose();
             speed(); // 调用修改后的speed函数
 
-            //视频播放进度达到100%跳转下一节视频
-            if ((c / d) >= 1.0 || c >= d) {
-                $(".next").click();
-                console.log("视频播放完成，跳转到下一节");
-                console.log("本节观看百分比" + ((c/d)*100).toFixed(1) + "%");
+            // 严格检测：剩余时间小于1秒时提示即将结束
+            if (remainingTime > 0 && remainingTime < 1.0) {
+                console.log(`⚠ 视频即将结束，剩余${remainingTime.toFixed(2)}秒`);
+            }
+
+            // 只有在极端情况下（ended事件未触发但已播放完）才手动跳转
+            // 必须满足：当前时间 >= 总时长 - 0.5秒，且视频已经开始播放
+            if (c >= d - 0.5 && c > 0 && d > 0) {
+                let isMarked = isVideoCompleted(videoId);
+                if (!isMarked) {
+                    console.log("========================================");
+                    console.log("✓ 检测到视频已播放至末尾（备用检测）");
+                    console.log(`本节观看完成度: ${percentage}%`);
+                    console.log("========================================");
+                    markVideoAsCompleted(videoId);
+                    $(".next").click();
+                    console.log("视频播放完成，跳转到下一节");
+                }
             }
         } else {
             console.log("视频时长未加载，等待...");
