@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         学堂在线刷课 (1.0x倍速版)
 // @namespace    http://tampermonkey.net/
-// @version      0.5.0
-// @description  该脚本可以完成学堂在线课程中的视频以及图文，自动跳过课后习题和讨论题，并将视频速度锁定在1.0x。新增：严格的视频完整播放检测，确保视频完整观看后才跳转，使用localStorage记录已完成视频避免重复播放。
+// @version      0.7.1
+// @description  该脚本可以完成学堂在线课程中的视频以及图文，自动跳过课后习题和讨论题，并将视频速度锁定在1.0x。新增：严格的视频完整播放检测，等待学堂在线平台确认完成状态（最多10秒），10秒跳转冷却机制，防止重复调用，确保每次只跳转一个视频并完整播放。
 // @match        https://www.xuetangx.com/*
 // @require      https://code.jquery.com/jquery-3.7.1.js
 // @icon         data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==
@@ -17,8 +17,10 @@
     
     console.log('========================================');
     console.log('学堂在线自动刷课脚本已启动 (1.0x倍速版)');
-    console.log('版本: 0.5.0');
-    console.log('功能: 严格视频完整播放检测 + 已完成视频记录');
+    console.log('版本: 0.7.1');
+    console.log('功能: 严格视频完整播放检测 + 平台完成状态确认 + 10秒跳转冷却');
+    console.log('跳转冷却时间: 10 秒');
+    console.log('平台状态等待: 最多 10 秒');
     console.log('提示: 如需清除已完成视频记录，请在控制台执行:');
     console.log('localStorage.removeItem("xuetangx_completed_videos")');
     console.log('========================================');
@@ -55,10 +57,112 @@
         }
     }
     
+    // 检测学堂在线平台是否标记当前视频为完成
+    function isPlatformMarkedComplete() {
+        try {
+            console.log("🔍 开始检测平台完成状态...");
+            
+            // 方法1: 检查视频进度百分比（最简单直接）
+            let video = $("video")[0];
+            if (video && video.duration > 0) {
+                let progress = (video.currentTime / video.duration) * 100;
+                console.log("视频播放进度:", progress.toFixed(2) + "%");
+                
+                // 如果播放进度 >= 99.5%，认为平台应该已标记完成
+                if (progress >= 99.5) {
+                    console.log("✓ 视频播放进度已达到99.5%以上");
+                    // 再等待2秒让平台同步状态
+                    return true;
+                }
+            }
+            
+            // 方法2: 检查左侧目录当前节点的完成状态
+            // 查找所有可能的当前播放节点选择器
+            let possibleSelectors = [
+                '.cur_play',
+                '.playing', 
+                '.active',
+                '.current',
+                '[class*="active"]',
+                '[class*="playing"]'
+            ];
+            
+            for (let selector of possibleSelectors) {
+                let nodes = $(selector);
+                console.log("检查选择器:", selector, "找到节点数:", nodes.length);
+                
+                if (nodes.length > 0) {
+                    nodes.each(function() {
+                        let node = $(this);
+                        let classes = node.attr('class') || '';
+                        let hasFinished = classes.includes('finished') || 
+                                        classes.includes('completed') || 
+                                        classes.includes('done');
+                        
+                        if (hasFinished) {
+                            console.log("✓ 找到完成标记，class:", classes);
+                            return true;
+                        }
+                    });
+                }
+            }
+            
+            console.log("❌ 未检测到平台完成标记");
+            return false;
+        } catch (e) {
+            console.error("检测平台完成状态失败:", e);
+            return false;
+        }
+    }
+    
+    // 等待学堂在线平台标记视频完成
+    function waitForPlatformComplete(callback, maxWaitTime = 10000) {
+        // 防止重复调用
+        if (isWaitingForPlatform) {
+            console.log("⏸ 已经在等待平台确认中，忽略重复调用");
+            return;
+        }
+        
+        isWaitingForPlatform = true;
+        console.log("⏳ 等待学堂在线平台标记视频完成...");
+        let startTime = Date.now();
+        let checkInterval = setInterval(() => {
+            let elapsedTime = Date.now() - startTime;
+            
+            if (isPlatformMarkedComplete()) {
+                clearInterval(checkInterval);
+                isWaitingForPlatform = false;
+                console.log("✓ 平台已确认视频完成，准备跳转");
+                callback(true);
+                return;
+            }
+            
+            // 超时处理
+            if (elapsedTime >= maxWaitTime) {
+                clearInterval(checkInterval);
+                isWaitingForPlatform = false;
+                console.warn("⚠ 等待平台标记超时(" + (maxWaitTime/1000) + "秒)，强制跳转");
+                callback(false);
+                return;
+            }
+            
+            // 每5秒输出一次等待状态
+            if (elapsedTime % 5000 < 1000) {
+                console.log("⏳ 等待中... 已等待", Math.floor(elapsedTime/1000), "秒");
+            }
+        }, 1000); // 每秒检查一次
+    }
+    
     // ========== 自动刷课相关 ==========
     
     // 自动开始刷课
     let autoInterval;
+    
+    // 跳转控制变量
+    let isJumping = false; // 跳转锁，防止重复跳转
+    let lastJumpTime = 0; // 上次跳转的时间戳
+    const JUMP_COOLDOWN = 10000; // 跳转冷却时间：10秒
+    let isWaitingForPlatform = false; // 是否正在等待平台确认
     
     // 等待页面加载完成后自动开始
     setTimeout(function() {
@@ -72,8 +176,48 @@
         autoInterval = setInterval(startClass, 2000);
     }
 
+    // 统一的跳转函数，带冷却控制
+    function jumpToNext(reason) {
+        let currentTime = Date.now();
+        
+        // 检查是否在冷却期内
+        if (isJumping || (currentTime - lastJumpTime < JUMP_COOLDOWN)) {
+            console.log("⏸ 跳转冷却中，忽略本次跳转请求");
+            return false;
+        }
+        
+        isJumping = true;
+        lastJumpTime = currentTime;
+        
+        console.log("========================================");
+        console.log("🔄 准备跳转到下一节");
+        console.log("跳转原因:", reason);
+        console.log("========================================");
+        
+        $(".next").click();
+        
+        // 10秒后解除跳转锁
+        setTimeout(() => {
+            isJumping = false;
+            console.log("✓ 跳转冷却结束，可以继续检测");
+        }, JUMP_COOLDOWN);
+        
+        return true;
+    }
+
     // 视频脚本
     function startVideo() {
+        // 如果正在跳转中或等待平台确认中，暂停检测
+        if (isJumping) {
+            console.log("⏸ 正在跳转中，暂停视频检测...");
+            return;
+        }
+        
+        if (isWaitingForPlatform) {
+            console.log("⏸ 正在等待平台确认，暂停视频检测...");
+            return;
+        }
+        
         let video = $("video")[0];
         if (!video) {
             console.log("未找到视频元素，等待加载...");
@@ -86,8 +230,8 @@
         
         // 检查当前视频是否已完成
         if (isVideoCompleted(videoId)) {
-            console.log("⚠ 此视频已完成，跳转下一节");
-            $(".next").click();
+            console.log("⚠ 此视频已完成");
+            jumpToNext("视频已完成");
             return;
         }
 
@@ -101,11 +245,16 @@
                     console.log("✓ 视频ended事件触发，视频已播放完成");
                     console.log("完成的视频ID:", currentVideoId);
                     console.log("========================================");
-                    markVideoAsCompleted(currentVideoId);
-                    setTimeout(() => {
-                        $(".next").click();
-                        console.log("准备跳转到下一节...");
-                    }, 1000); // 等待1秒后跳转，确保状态已保存
+                    
+                    // 等待学堂在线平台标记完成
+                    waitForPlatformComplete((platformConfirmed) => {
+                        markVideoAsCompleted(currentVideoId);
+                        if (platformConfirmed) {
+                            jumpToNext("ended事件触发 + 平台已确认");
+                        } else {
+                            jumpToNext("ended事件触发 + 平台超时");
+                        }
+                    }, 10000); // 最多等待10秒
                 });
             })(videoId);
             console.log("✓ 已为视频添加ended事件监听器");
@@ -140,13 +289,18 @@
             if (c >= d - 0.5 && c > 0 && d > 0) {
                 let isMarked = isVideoCompleted(videoId);
                 if (!isMarked) {
-                    console.log("========================================");
                     console.log("✓ 检测到视频已播放至末尾（备用检测）");
                     console.log(`本节观看完成度: ${percentage}%`);
-                    console.log("========================================");
-                    markVideoAsCompleted(videoId);
-                    $(".next").click();
-                    console.log("视频播放完成，跳转到下一节");
+                    
+                    // 等待学堂在线平台标记完成
+                    waitForPlatformComplete((platformConfirmed) => {
+                        markVideoAsCompleted(videoId);
+                        if (platformConfirmed) {
+                            jumpToNext("视频播放完成（备用检测） + 平台已确认");
+                        } else {
+                            jumpToNext("视频播放完成（备用检测） + 平台超时");
+                        }
+                    }, 10000); // 最多等待10秒
                 }
             }
         } else {
